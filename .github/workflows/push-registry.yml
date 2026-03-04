@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: push-registry
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
     inputs:
       image:

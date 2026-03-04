@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: full-rebuild
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
     inputs:
       force_rebuild_all:
