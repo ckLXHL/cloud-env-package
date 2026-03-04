@@ -2,11 +2,6 @@ name: Push to Registries
 
 on:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
     inputs:
       image:
         description: '指定镜像（留空则推送所有）'
@@ -27,6 +22,10 @@ concurrency:
         required: false
         default: 'latest'
         type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}

@@ -2,11 +2,6 @@ name: Full Rebuild
 
 on:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
     inputs:
       force_rebuild_all:
         description: '强制重建所有镜像'
@@ -24,6 +19,10 @@ concurrency:
           - toolchain
           - services
           - compose
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   full-rebuild:

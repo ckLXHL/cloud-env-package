@@ -2,11 +2,6 @@ name: Build Matrix
 
 on:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
     inputs:
       layer:
         description: '构建层 (base/toolchain/services/compose/all)'
@@ -28,6 +23,10 @@ concurrency:
         required: false
         default: true
         type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io/${{ github.repository_owner }}
