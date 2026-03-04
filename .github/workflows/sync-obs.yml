@@ -2,6 +2,11 @@ name: Sync to 华为云OBS
 
 on:
   workflow_dispatch:
+
+concurrency:
+  group: sync-obs
+  cancel-in-progress: false
+
     inputs:
       version:
         description: '版本号（留空则使用 latest）'

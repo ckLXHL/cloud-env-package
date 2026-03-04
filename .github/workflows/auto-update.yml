@@ -2,6 +2,11 @@ name: Full Rebuild
 
 on:
   workflow_dispatch:
+
+concurrency:
+  group: full-rebuild
+  cancel-in-progress: false
+
     inputs:
       force_rebuild_all:
         description: '强制重建所有镜像'

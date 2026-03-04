@@ -2,6 +2,11 @@ name: Build Matrix
 
 on:
   workflow_dispatch:
+
+concurrency:
+  group: build-matrix
+  cancel-in-progress: false
+
     inputs:
       layer:
         description: '构建层 (base/toolchain/services/compose/all)'

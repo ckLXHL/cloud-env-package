@@ -2,6 +2,11 @@ name: Push to Registries
 
 on:
   workflow_dispatch:
+
+concurrency:
+  group: push-registry
+  cancel-in-progress: false
+
     inputs:
       image:
         description: '指定镜像（留空则推送所有）'
