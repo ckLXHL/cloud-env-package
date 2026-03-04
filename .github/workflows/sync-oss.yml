@@ -1,0 +1,105 @@
+name: Sync to 阿里云OSS
+
+on:
+  workflow_run:
+    workflows: ["Push to Registries"]
+    types:
+      - completed
+    branches:
+      - main
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空则使用 latest）'
+        required: false
+        default: 'latest'
+        type: string
+      arch:
+        description: '架构'
+        required: false
+        default: 'amd64'
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - both
+      images:
+        description: '指定镜像（空格分隔，留空则同步所有）'
+        required: false
+        type: string
+
+jobs:
+  sync-to-oss:
+    name: Sync to 阿里云OSS
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    if: |
+      github.event.workflow_run.conclusion == 'success' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y skopeo zstd python3 python3-pip
+          pip3 install pyyaml
+
+      - name: 安装 ossutil
+        run: |
+          ARCH=$(dpkg --print-architecture)
+          curl -fsSL "https://gosspublic.alicdn.com/ossutil/1.7.17/ossutil-v1.7.17-linux-${ARCH}.zip" \
+            -o /tmp/ossutil.zip
+          unzip -q /tmp/ossutil.zip -d /tmp/ossutil/
+          sudo install -m 755 /tmp/ossutil/ossutil-v1.7.17-linux-${ARCH}/ossutil /usr/local/bin/ossutil
+
+      - name: 配置 ossutil
+        run: |
+          ossutil config \
+            --endpoint "${{ secrets.ALIYUN_OSS_ENDPOINT }}" \
+            --access-key-id "${{ secrets.ALIYUN_OSS_ACCESS_KEY }}" \
+            --access-key-secret "${{ secrets.ALIYUN_OSS_SECRET_KEY }}" \
+            --config-file ~/.ossutilconfig
+
+      - name: 登录 GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            skopeo login ghcr.io \
+              -u "${{ github.actor }}" \
+              --password-stdin
+
+      - name: 同步 amd64 镜像到 OSS
+        if: ${{ github.event.inputs.arch != 'arm64' }}
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          VERSION: ${{ github.event.inputs.version || (github.event_name == 'release' && github.event.release.tag_name) || 'latest' }}
+          ARCH: amd64
+          ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+          ALIYUN_OSS_ENDPOINT: ${{ secrets.ALIYUN_OSS_ENDPOINT }}
+          ALIYUN_OSS_ACCESS_KEY: ${{ secrets.ALIYUN_OSS_ACCESS_KEY }}
+          ALIYUN_OSS_SECRET_KEY: ${{ secrets.ALIYUN_OSS_SECRET_KEY }}
+          WORK_DIR: /tmp/devenv-sync-amd64
+        run: |
+          mkdir -p "${WORK_DIR}"
+          bash distribution/oss/sync-oss.sh ${{ github.event.inputs.images || '' }}
+
+      - name: 同步 arm64 镜像到 OSS
+        if: ${{ github.event.inputs.arch == 'arm64' || github.event.inputs.arch == 'both' }}
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          VERSION: ${{ github.event.inputs.version || (github.event_name == 'release' && github.event.release.tag_name) || 'latest' }}
+          ARCH: arm64
+          ALIYUN_OSS_BUCKET: ${{ secrets.ALIYUN_OSS_BUCKET }}
+          ALIYUN_OSS_ENDPOINT: ${{ secrets.ALIYUN_OSS_ENDPOINT }}
+          ALIYUN_OSS_ACCESS_KEY: ${{ secrets.ALIYUN_OSS_ACCESS_KEY }}
+          ALIYUN_OSS_SECRET_KEY: ${{ secrets.ALIYUN_OSS_SECRET_KEY }}
+          WORK_DIR: /tmp/devenv-sync-arm64
+        run: |
+          mkdir -p "${WORK_DIR}"
+          bash distribution/oss/sync-oss.sh ${{ github.event.inputs.images || '' }}

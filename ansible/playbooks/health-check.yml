@@ -1,0 +1,79 @@
+---
+# Health Check Playbook: 检查开发环境运行状态
+# 用法: ansible-playbook playbooks/health-check.yml -i inventory/hosts.ini
+- name: Health check development environment
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    devenv_install_dir: "/opt/devenv"
+
+  tasks:
+    - name: 检查容器运行时
+      command: "which {{ item }}"
+      loop:
+        - docker
+        - podman
+        - nerdctl
+      register: runtime_checks
+      failed_when: false
+      changed_when: false
+
+    - name: 显示可用运行时
+      debug:
+        msg: "{{ item.item }}: {{ '✓ 可用' if item.rc == 0 else '✗ 未安装' }}"
+      loop: "{{ runtime_checks.results }}"
+
+    - name: 检查 Docker 服务状态
+      systemd:
+        name: docker
+      register: docker_service
+      failed_when: false
+
+    - name: 显示 Docker 服务状态
+      debug:
+        msg: "Docker 服务: {{ docker_service.status.ActiveState | default('未安装') }}"
+
+    - name: 检查已加载的 devenv 镜像（Docker）
+      shell: docker images --format "{{ '{{' }}.Repository{{ '}}' }}:{{ '{{' }}.Tag{{ '}}' }}" | grep "devenv\|compose\|toolchain\|base-ubuntu" || true
+      register: docker_images
+      changed_when: false
+      failed_when: false
+
+    - name: 检查已加载的 devenv 镜像（Podman）
+      shell: podman images --format "{{ '{{' }}.Repository{{ '}}' }}:{{ '{{' }}.Tag{{ '}}' }}" | grep "devenv\|compose\|toolchain\|base-ubuntu" || true
+      register: podman_images
+      changed_when: false
+      failed_when: false
+
+    - name: 显示已加载镜像
+      debug:
+        msg: |
+          Docker 镜像:
+          {{ docker_images.stdout_lines | default([]) | join('\n') | default('(无)') }}
+          Podman 镜像:
+          {{ podman_images.stdout_lines | default([]) | join('\n') | default('(无)') }}
+
+    - name: 检查 devenv 启动脚本
+      stat:
+        path: "{{ devenv_install_dir }}/start.sh"
+      register: start_script
+
+    - name: 检查磁盘空间
+      shell: df -h / | tail -1
+      register: disk_usage
+      changed_when: false
+
+    - name: 健康检查报告
+      debug:
+        msg: |
+          ==========================================
+          开发环境健康检查报告
+          ==========================================
+          主机: {{ inventory_hostname }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          架构: {{ ansible_architecture }}
+          启动脚本: {{ '✓ 存在' if start_script.stat.exists else '✗ 未安装' }}
+          磁盘使用: {{ disk_usage.stdout }}
+          ==========================================

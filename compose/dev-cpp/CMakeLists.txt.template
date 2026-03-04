@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.20)
+project(MyProject CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# 查找 Google Benchmark
+find_package(benchmark REQUIRED)
+
+# 主程序
+add_executable(app main.cpp)
+target_compile_options(app PRIVATE -O2 -Wall -Wextra)
+
+# Benchmark 程序
+add_executable(bench benchmark-example.cpp)
+target_link_libraries(bench PRIVATE benchmark::benchmark benchmark::benchmark_main)
+target_compile_options(bench PRIVATE -O3 -DNDEBUG)

@@ -1,0 +1,60 @@
+# 国内镜像源配置
+# 用于在 Dockerfile 和脚本中替换默认的包管理器镜像源
+
+version: "1.0"
+
+# APT 镜像源（Ubuntu）
+apt:
+  ubuntu_22_04:
+    sources_list: |
+      deb https://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
+      deb https://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse
+      deb https://mirrors.aliyun.com/ubuntu/ jammy-backports main restricted universe multiverse
+      deb https://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse
+    fallback: |
+      deb https://mirrors.huaweicloud.com/ubuntu/ jammy main restricted universe multiverse
+      deb https://mirrors.huaweicloud.com/ubuntu/ jammy-updates main restricted universe multiverse
+      deb https://mirrors.huaweicloud.com/ubuntu/ jammy-backports main restricted universe multiverse
+      deb https://mirrors.huaweicloud.com/ubuntu/ jammy-security main restricted universe multiverse
+
+  kylin_v10:
+    sources_list: |
+      deb https://mirrors.aliyun.com/kylinos/ kylin-desktop-v10 main contrib non-free
+      deb https://mirrors.aliyun.com/kylinos/ kylin-desktop-v10-updates main contrib non-free
+
+# PyPI 镜像源
+pip:
+  index_url: "https://mirrors.aliyun.com/pypi/simple/"
+  trusted_host: "mirrors.aliyun.com"
+  fallback_index_url: "https://pypi.tuna.tsinghua.edu.cn/simple/"
+  fallback_trusted_host: "pypi.tuna.tsinghua.edu.cn"
+  config: |
+    [global]
+    index-url = https://mirrors.aliyun.com/pypi/simple/
+    trusted-host = mirrors.aliyun.com
+    timeout = 60
+
+# uv（Python 包管理器）镜像源
+uv:
+  index_url: "https://mirrors.aliyun.com/pypi/simple/"
+
+# Go 模块代理
+go:
+  goproxy: "https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct"
+
+# npm 镜像源
+npm:
+  registry: "https://registry.npmmirror.com"
+
+# Docker 镜像加速（用于目标机运行时）
+docker_mirror:
+  registry_mirrors:
+    - "https://registry.cn-hangzhou.aliyuncs.com"
+    - "https://mirror.ccs.tencentyun.com"
+    - "https://hub-mirror.c.163.com"
+
+# GitHub Releases / Artifacts 下载加速
+github_proxy:
+  # 通过 GitHub Actions 构建时无需代理，直接下载
+  use_proxy: false
+  proxy_url: ""

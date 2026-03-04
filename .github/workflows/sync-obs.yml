@@ -1,0 +1,105 @@
+name: Sync to 华为云OBS
+
+on:
+  workflow_run:
+    workflows: ["Push to Registries"]
+    types:
+      - completed
+    branches:
+      - main
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空则使用 latest）'
+        required: false
+        default: 'latest'
+        type: string
+      arch:
+        description: '架构'
+        required: false
+        default: 'amd64'
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - both
+      images:
+        description: '指定镜像（空格分隔，留空则同步所有）'
+        required: false
+        type: string
+
+jobs:
+  sync-to-obs:
+    name: Sync to 华为云OBS
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    if: |
+      github.event.workflow_run.conclusion == 'success' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y skopeo zstd python3 python3-pip
+          pip3 install pyyaml
+
+      - name: 安装 obsutil
+        run: |
+          ARCH=$(dpkg --print-architecture)
+          curl -fsSL \
+            "https://obs-community-intl.obs.ap-southeast-1.myhuaweicloud.com/obsutil/current/obsutil_linux_${ARCH}.tar.gz" \
+            -o /tmp/obsutil.tar.gz
+          tar -xzf /tmp/obsutil.tar.gz -C /tmp/
+          sudo install -m 755 /tmp/obsutil_linux_${ARCH}/obsutil /usr/local/bin/obsutil
+
+      - name: 配置 obsutil
+        run: |
+          obsutil config \
+            -i="${{ secrets.HUAWEI_OBS_ACCESS_KEY }}" \
+            -k="${{ secrets.HUAWEI_OBS_SECRET_KEY }}" \
+            -e="${{ secrets.HUAWEI_OBS_ENDPOINT }}"
+
+      - name: 登录 GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            skopeo login ghcr.io \
+              -u "${{ github.actor }}" \
+              --password-stdin
+
+      - name: 同步 amd64 镜像到 OBS
+        if: ${{ github.event.inputs.arch != 'arm64' }}
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          VERSION: ${{ github.event.inputs.version || (github.event_name == 'release' && github.event.release.tag_name) || 'latest' }}
+          ARCH: amd64
+          HUAWEI_OBS_BUCKET: ${{ secrets.HUAWEI_OBS_BUCKET }}
+          HUAWEI_OBS_ENDPOINT: ${{ secrets.HUAWEI_OBS_ENDPOINT }}
+          HUAWEI_OBS_ACCESS_KEY: ${{ secrets.HUAWEI_OBS_ACCESS_KEY }}
+          HUAWEI_OBS_SECRET_KEY: ${{ secrets.HUAWEI_OBS_SECRET_KEY }}
+          WORK_DIR: /tmp/devenv-sync-amd64
+        run: |
+          mkdir -p "${WORK_DIR}"
+          bash distribution/obs/sync-obs.sh ${{ github.event.inputs.images || '' }}
+
+      - name: 同步 arm64 镜像到 OBS
+        if: ${{ github.event.inputs.arch == 'arm64' || github.event.inputs.arch == 'both' }}
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          VERSION: ${{ github.event.inputs.version || (github.event_name == 'release' && github.event.release.tag_name) || 'latest' }}
+          ARCH: arm64
+          HUAWEI_OBS_BUCKET: ${{ secrets.HUAWEI_OBS_BUCKET }}
+          HUAWEI_OBS_ENDPOINT: ${{ secrets.HUAWEI_OBS_ENDPOINT }}
+          HUAWEI_OBS_ACCESS_KEY: ${{ secrets.HUAWEI_OBS_ACCESS_KEY }}
+          HUAWEI_OBS_SECRET_KEY: ${{ secrets.HUAWEI_OBS_SECRET_KEY }}
+          WORK_DIR: /tmp/devenv-sync-arm64
+        run: |
+          mkdir -p "${WORK_DIR}"
+          bash distribution/obs/sync-obs.sh ${{ github.event.inputs.images || '' }}

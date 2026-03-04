@@ -1,0 +1,20 @@
+#include <benchmark/benchmark.h>
+#include <vector>
+#include <algorithm>
+
+// 示例：排序性能基准测试
+static void BM_SortVector(benchmark::State& state) {
+    std::vector<int> v(state.range(0));
+    for (auto& x : v) {
+        x = rand() % 1000;
+    }
+    for (auto _ : state) {
+        std::vector<int> copy = v;
+        std::sort(copy.begin(), copy.end());
+        benchmark::DoNotOptimize(copy);
+    }
+    state.SetItemsProcessed(state.iterations() * state.range(0));
+}
+BENCHMARK(BM_SortVector)->Range(8, 8 << 10);
+
+BENCHMARK_MAIN();

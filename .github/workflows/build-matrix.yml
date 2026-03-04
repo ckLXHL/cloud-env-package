@@ -1,0 +1,408 @@
+name: Build Matrix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'base/**'
+      - 'toolchain/**'
+      - 'services/**'
+      - 'compose/**'
+      - 'config/matrix.yaml'
+      - '.github/workflows/build-matrix.yml'
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: '构建层 (base/toolchain/services/compose/all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - base
+          - toolchain
+          - services
+          - compose
+      image:
+        description: '指定镜像名称（留空则按层构建）'
+        required: false
+        type: string
+      arch:
+        description: '目标架构 (amd64/arm64，留空则双架构)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - amd64
+          - arm64
+      push:
+        description: '是否推送到镜像仓库'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  # 检测变更，确定需要重建的镜像
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      rebuild_base: ${{ steps.changes.outputs.base }}
+      rebuild_toolchain: ${{ steps.changes.outputs.toolchain }}
+      rebuild_services: ${{ steps.changes.outputs.services }}
+      rebuild_compose: ${{ steps.changes.outputs.compose }}
+      layer: ${{ steps.params.outputs.layer }}
+      image: ${{ steps.params.outputs.image }}
+      arch: ${{ steps.params.outputs.arch }}
+      should_push: ${{ steps.params.outputs.push }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 检测文件变更
+        id: changes
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q "^base/"; then
+            echo "base=true" >> $GITHUB_OUTPUT
+          else
+            echo "base=false" >> $GITHUB_OUTPUT
+          fi
+          if git diff --name-only HEAD~1 HEAD | grep -q "^toolchain/"; then
+            echo "toolchain=true" >> $GITHUB_OUTPUT
+          else
+            echo "toolchain=false" >> $GITHUB_OUTPUT
+          fi
+          if git diff --name-only HEAD~1 HEAD | grep -q "^services/"; then
+            echo "services=true" >> $GITHUB_OUTPUT
+          else
+            echo "services=false" >> $GITHUB_OUTPUT
+          fi
+          if git diff --name-only HEAD~1 HEAD | grep -q "^compose/"; then
+            echo "compose=true" >> $GITHUB_OUTPUT
+          else
+            echo "compose=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 确定构建参数
+        id: params
+        run: |
+          echo "layer=${{ github.event.inputs.layer || 'all' }}" >> $GITHUB_OUTPUT
+          echo "image=${{ github.event.inputs.image || '' }}" >> $GITHUB_OUTPUT
+          echo "arch=${{ github.event.inputs.arch || '' }}" >> $GITHUB_OUTPUT
+          echo "push=${{ github.event.inputs.push || 'true' }}" >> $GITHUB_OUTPUT
+
+  # L0: 构建基础镜像
+  build-base:
+    name: Build Base Images
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.rebuild_base == 'true' ||
+      needs.detect-changes.outputs.layer == 'base' ||
+      needs.detect-changes.outputs.layer == 'all' ||
+      github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: base-ubuntu
+            context: base/ubuntu-amd64
+            platform: linux/amd64
+          - name: base-ubuntu
+            context: base/ubuntu-arm64
+            platform: linux/arm64
+          - name: base-kylin
+            context: base/kylin-arm64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU（多架构支持）
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 获取版本信息
+        id: version
+        run: |
+          VERSION=$(python3 -c "
+          import yaml
+          with open('config/matrix.yaml') as f:
+              cfg = yaml.safe_load(f)
+          for img in cfg['images']:
+              if img['name'] == '${{ matrix.name }}':
+                  print(img['version'])
+                  break
+          else:
+              print('latest')
+          ")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          platforms: ${{ matrix.platform }}
+          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ matrix.name }}:latest
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # L1: 构建工具链镜像（并行，无相互依赖）
+  build-toolchain:
+    name: Build Toolchain Images
+    runs-on: ubuntu-latest
+    needs:
+      - detect-changes
+      - build-base
+    if: |
+      always() &&
+      (needs.build-base.result == 'success' || needs.build-base.result == 'skipped') &&
+      (needs.detect-changes.outputs.rebuild_toolchain == 'true' ||
+       needs.detect-changes.outputs.rebuild_base == 'true' ||
+       needs.detect-changes.outputs.layer == 'toolchain' ||
+       needs.detect-changes.outputs.layer == 'all' ||
+       github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: toolchain-cpp
+            context: toolchain/cpp
+          - name: toolchain-python
+            context: toolchain/python
+          - name: toolchain-common
+            context: toolchain/common
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 获取版本信息
+        id: version
+        run: |
+          VERSION=$(python3 -c "
+          import yaml
+          with open('config/matrix.yaml') as f:
+              cfg = yaml.safe_load(f)
+          for img in cfg['images']:
+              if img['name'] == '${{ matrix.name }}':
+                  print(img['version'])
+                  break
+          else:
+              print('latest')
+          ")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ matrix.name }}:latest
+          build-args: |
+            REGISTRY=${{ env.REGISTRY }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # toolchain-gbench 单独构建（依赖 toolchain-cpp）
+  build-gbench:
+    name: Build Google Benchmark
+    runs-on: ubuntu-latest
+    needs:
+      - detect-changes
+      - build-toolchain
+    if: |
+      always() &&
+      needs.build-toolchain.result == 'success' &&
+      (needs.detect-changes.outputs.rebuild_toolchain == 'true' ||
+       needs.detect-changes.outputs.layer == 'toolchain' ||
+       needs.detect-changes.outputs.layer == 'all' ||
+       github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push toolchain-gbench
+        uses: docker/build-push-action@v5
+        with:
+          context: toolchain/gbench
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          tags: |
+            ${{ env.REGISTRY }}/toolchain-gbench:1.8.3
+            ${{ env.REGISTRY }}/toolchain-gbench:latest
+          build-args: |
+            REGISTRY=${{ env.REGISTRY }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/toolchain-gbench:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/toolchain-gbench:cache,mode=max
+
+  # L2: 构建服务镜像
+  build-services:
+    name: Build Service Images
+    runs-on: ubuntu-latest
+    needs:
+      - detect-changes
+      - build-toolchain
+    if: |
+      always() &&
+      (needs.build-toolchain.result == 'success' || needs.build-toolchain.result == 'skipped') &&
+      (needs.detect-changes.outputs.rebuild_services == 'true' ||
+       needs.detect-changes.outputs.rebuild_toolchain == 'true' ||
+       needs.detect-changes.outputs.layer == 'services' ||
+       needs.detect-changes.outputs.layer == 'all' ||
+       github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: services-docker
+            context: services/docker
+          - name: services-ansible
+            context: services/ansible
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.name }}:latest
+          build-args: |
+            REGISTRY=${{ env.REGISTRY }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache,mode=max
+
+  # L3: 构建场景组合镜像
+  build-compose:
+    name: Build Compose Images
+    runs-on: ubuntu-latest
+    needs:
+      - detect-changes
+      - build-services
+      - build-gbench
+    if: |
+      always() &&
+      (needs.build-services.result == 'success' || needs.build-services.result == 'skipped') &&
+      (needs.build-gbench.result == 'success' || needs.build-gbench.result == 'skipped') &&
+      (needs.detect-changes.outputs.rebuild_compose == 'true' ||
+       needs.detect-changes.outputs.layer == 'compose' ||
+       needs.detect-changes.outputs.layer == 'all' ||
+       github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: compose-full
+            context: compose/dev-full
+          - name: compose-cpp
+            context: compose/dev-cpp
+          - name: compose-python
+            context: compose/dev-python
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.name }}:latest
+          build-args: |
+            REGISTRY=${{ env.REGISTRY }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache,mode=max

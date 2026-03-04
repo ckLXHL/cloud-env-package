@@ -1,0 +1,187 @@
+# 构建矩阵定义
+# 每个镜像的依赖镜像、平台列表、版本号、构建参数
+# DAG 拓扑排序保证构建顺序，支持并行构建无依赖关系的镜像
+
+version: "1.0"
+
+defaults:
+  platforms:
+    - linux/amd64
+    - linux/arm64
+  registry: ghcr
+  cache_from: registry
+  cache_to: registry
+
+images:
+  # L0: 基础系统层
+  - name: base-ubuntu
+    layer: 0
+    context: base/ubuntu-amd64
+    dockerfile: base/ubuntu-amd64/Dockerfile
+    platforms:
+      - linux/amd64
+    version: "22.04"
+    rebuild_schedule: monthly
+    depends_on: []
+    build_args:
+      UBUNTU_VERSION: "22.04"
+
+  - name: base-ubuntu-arm64
+    layer: 0
+    context: base/ubuntu-arm64
+    dockerfile: base/ubuntu-arm64/Dockerfile
+    platforms:
+      - linux/arm64
+    version: "22.04"
+    rebuild_schedule: monthly
+    depends_on: []
+    build_args:
+      UBUNTU_VERSION: "22.04"
+
+  - name: base-kylin
+    layer: 0
+    context: base/kylin-arm64
+    dockerfile: base/kylin-arm64/Dockerfile
+    platforms:
+      - linux/arm64
+    version: "v10"
+    rebuild_schedule: monthly
+    depends_on: []
+    build_args:
+      KYLIN_VERSION: "v10"
+
+  # L1: 语言与工具链层
+  - name: toolchain-cpp
+    layer: 1
+    context: toolchain/cpp
+    dockerfile: toolchain/cpp/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "14.0"
+    rebuild_schedule: on_version
+    depends_on:
+      - base-ubuntu
+    build_args:
+      GCC_VERSION: "14"
+      CLANG_VERSION: "18"
+      CMAKE_VERSION: "3.28.3"
+      NINJA_VERSION: "1.11.1"
+
+  - name: toolchain-gbench
+    layer: 1
+    context: toolchain/gbench
+    dockerfile: toolchain/gbench/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "1.8.3"
+    rebuild_schedule: on_version
+    depends_on:
+      - toolchain-cpp
+    build_args:
+      GBENCH_VERSION: "1.8.3"
+
+  - name: toolchain-python
+    layer: 1
+    context: toolchain/python
+    dockerfile: toolchain/python/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "3.12"
+    rebuild_schedule: on_version
+    depends_on:
+      - base-ubuntu
+    build_args:
+      PYTHON_VERSION: "3.12"
+      UV_VERSION: "0.4.0"
+
+  - name: toolchain-common
+    layer: 1
+    context: toolchain/common
+    dockerfile: toolchain/common/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "2.0"
+    rebuild_schedule: monthly
+    depends_on:
+      - base-ubuntu
+    build_args: {}
+
+  # L2: 可选服务层
+  - name: services-docker
+    layer: 2
+    context: services/docker
+    dockerfile: services/docker/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "25.0"
+    rebuild_schedule: on_version
+    depends_on:
+      - toolchain-common
+    build_args:
+      DOCKER_VERSION: "25.0"
+      PODMAN_VERSION: "4.9"
+
+  - name: services-ansible
+    layer: 2
+    context: services/ansible
+    dockerfile: services/ansible/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "2.16"
+    rebuild_schedule: on_version
+    depends_on:
+      - toolchain-python
+    build_args:
+      ANSIBLE_VERSION: "9.3.0"
+
+  # L3: 场景组合层
+  - name: compose-full
+    layer: 3
+    context: compose/dev-full
+    dockerfile: compose/dev-full/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "1.0"
+    rebuild_schedule: on_demand
+    depends_on:
+      - toolchain-cpp
+      - toolchain-python
+      - toolchain-common
+      - services-docker
+      - services-ansible
+    build_args: {}
+
+  - name: compose-cpp
+    layer: 3
+    context: compose/dev-cpp
+    dockerfile: compose/dev-cpp/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "1.0"
+    rebuild_schedule: on_demand
+    depends_on:
+      - toolchain-cpp
+      - toolchain-common
+    build_args: {}
+
+  - name: compose-python
+    layer: 3
+    context: compose/dev-python
+    dockerfile: compose/dev-python/Dockerfile
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    version: "1.0"
+    rebuild_schedule: on_demand
+    depends_on:
+      - toolchain-python
+      - toolchain-common
+    build_args: {}

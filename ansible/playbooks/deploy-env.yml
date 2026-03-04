@@ -1,0 +1,145 @@
+---
+# Deploy Environment Playbook: 部署开发环境
+# 功能：从 OSS/OBS 下载并加载镜像，配置开发环境
+# 用法: ansible-playbook playbooks/deploy-env.yml -i inventory/hosts.ini
+- name: Deploy development environment
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    devenv_version: "{{ lookup('env', 'DEVENV_VERSION') | default('latest', true) }}"
+    devenv_scene: "{{ lookup('env', 'DEVENV_SCENE') | default('full', true) }}"
+    registry_source: "{{ lookup('env', 'REGISTRY_SOURCE') | default('oss', true) }}"
+    devenv_install_dir: "/opt/devenv"
+    loader_script_url: "{{ lookup('env', 'LOADER_SCRIPT_URL') }}"
+    # OSS 配置
+    oss_bucket: "{{ lookup('env', 'OSS_BUCKET') }}"
+    oss_endpoint: "{{ lookup('env', 'OSS_ENDPOINT') }}"
+    oss_access_key: "{{ lookup('env', 'OSS_ACCESS_KEY') }}"
+    oss_secret_key: "{{ lookup('env', 'OSS_SECRET_KEY') }}"
+
+  tasks:
+    - name: 检测目标机信息
+      debug:
+        msg: >
+          Deploying devenv {{ devenv_scene }} v{{ devenv_version }}
+          on {{ ansible_distribution }} {{ ansible_architecture }}
+
+    - name: 设置架构变量
+      set_fact:
+        target_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
+
+    - name: 确保工作目录存在
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ devenv_install_dir }}"
+        - "{{ devenv_install_dir }}/scripts"
+        - "/tmp/devenv-loader"
+
+    - name: 复制 load.sh 到目标机
+      copy:
+        src: "{{ playbook_dir }}/../../distribution/loader/load.sh"
+        dest: "{{ devenv_install_dir }}/scripts/load.sh"
+        mode: "0755"
+
+    - name: 检测可用运行时
+      command: "which {{ item }}"
+      loop:
+        - podman
+        - docker
+        - nerdctl
+      register: runtime_checks
+      failed_when: false
+      changed_when: false
+
+    - name: 确定运行时
+      set_fact:
+        container_runtime: >-
+          {{
+            (runtime_checks.results | selectattr('rc', 'eq', 0) | map(attribute='item') | list | first)
+            | default('docker')
+          }}
+
+    - name: 显示将使用的运行时
+      debug:
+        msg: "使用容器运行时: {{ container_runtime }}"
+
+    - name: 执行镜像加载（OSS）
+      shell: |
+        export OSS_BUCKET="{{ oss_bucket }}"
+        export OSS_ENDPOINT="{{ oss_endpoint }}"
+        export OSS_ACCESS_KEY="{{ oss_access_key }}"
+        export OSS_SECRET_KEY="{{ oss_secret_key }}"
+        export REGISTRY_SOURCE="{{ registry_source }}"
+        export SCENE="{{ devenv_scene }}"
+        export VERSION="{{ devenv_version }}"
+        export RUNTIME="{{ container_runtime }}"
+        export WORK_DIR="/tmp/devenv-loader"
+        bash {{ devenv_install_dir }}/scripts/load.sh
+      when: registry_source == "oss"
+      register: load_result
+      changed_when: load_result.rc == 0
+
+    - name: 执行镜像加载（OBS）
+      shell: |
+        export OBS_BUCKET="{{ lookup('env', 'OBS_BUCKET') }}"
+        export OBS_ENDPOINT="{{ lookup('env', 'OBS_ENDPOINT') }}"
+        export OBS_ACCESS_KEY="{{ lookup('env', 'OBS_ACCESS_KEY') }}"
+        export OBS_SECRET_KEY="{{ lookup('env', 'OBS_SECRET_KEY') }}"
+        export REGISTRY_SOURCE="{{ registry_source }}"
+        export SCENE="{{ devenv_scene }}"
+        export VERSION="{{ devenv_version }}"
+        export RUNTIME="{{ container_runtime }}"
+        export WORK_DIR="/tmp/devenv-loader"
+        bash {{ devenv_install_dir }}/scripts/load.sh
+      when: registry_source == "obs"
+      register: load_result_obs
+      changed_when: load_result_obs.rc == 0
+
+    - name: 显示加载结果
+      debug:
+        msg: "{{ (load_result.stdout_lines | default([])) + (load_result_obs.stdout_lines | default([])) }}"
+
+    - name: 创建开发环境启动脚本
+      copy:
+        dest: "{{ devenv_install_dir }}/start.sh"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          # 启动开发环境
+          RUNTIME="{{ container_runtime }}"
+          SCENE="{{ devenv_scene }}"
+          VERSION="{{ devenv_version }}"
+          REGISTRY="ghcr.io/ckLXHL"
+          WORKSPACE="${1:-$(pwd)}"
+
+          # 读取 git 配置（在运行时从 host 读取，避免构建时注入）
+          GIT_NAME=$(git config user.name 2>/dev/null || echo "developer")
+          GIT_EMAIL=$(git config user.email 2>/dev/null || echo "dev@example.com")
+
+          exec ${RUNTIME} run -it --rm \
+            -v "${WORKSPACE}:/workspace" \
+            -v ~/.ssh:/root/.ssh:ro \
+            -e "GIT_AUTHOR_NAME=${GIT_NAME}" \
+            -e "GIT_AUTHOR_EMAIL=${GIT_EMAIL}" \
+            --network host \
+            "${REGISTRY}/compose-${SCENE}:${VERSION}" \
+            /bin/zsh
+
+    - name: 创建软链
+      file:
+        src: "{{ devenv_install_dir }}/start.sh"
+        dest: "/usr/local/bin/devenv"
+        state: link
+      failed_when: false
+
+    - name: 部署完成
+      debug:
+        msg: |
+          开发环境部署完成！
+          启动命令: devenv [工作目录]
+          或: {{ devenv_install_dir }}/start.sh [工作目录]
