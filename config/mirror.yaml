@@ -17,10 +17,21 @@ apt:
       deb https://mirrors.huaweicloud.com/ubuntu/ jammy-backports main restricted universe multiverse
       deb https://mirrors.huaweicloud.com/ubuntu/ jammy-security main restricted universe multiverse
 
-  kylin_v10:
-    sources_list: |
-      deb https://mirrors.aliyun.com/kylinos/ kylin-desktop-v10 main contrib non-free
-      deb https://mirrors.aliyun.com/kylinos/ kylin-desktop-v10-updates main contrib non-free
+  openeuler_22_03:
+    repo: |
+      [OS]
+      name=OS
+      baseurl=https://mirrors.huaweicloud.com/openeuler/openEuler-22.03-LTS/OS/$basearch/
+      enabled=1
+      gpgcheck=1
+      gpgkey=https://mirrors.huaweicloud.com/openeuler/openEuler-22.03-LTS/OS/$basearch/RPM-GPG-KEY-openEuler
+
+      [everything]
+      name=everything
+      baseurl=https://mirrors.huaweicloud.com/openeuler/openEuler-22.03-LTS/everything/$basearch/
+      enabled=1
+      gpgcheck=1
+      gpgkey=https://mirrors.huaweicloud.com/openeuler/openEuler-22.03-LTS/everything/$basearch/RPM-GPG-KEY-openEuler
 
 # PyPI 镜像源
 pip:

@@ -1,13 +1,13 @@
 # 构建矩阵定义
 # 每个镜像的依赖镜像、平台列表、版本号、构建参数
 # DAG 拓扑排序保证构建顺序，支持并行构建无依赖关系的镜像
+# 当前阶段：仅支持 amd64（arm64 为可选未来计划，待 amd64 验证稳定后启用）
 
 version: "1.0"
 
 defaults:
   platforms:
     - linux/amd64
-    - linux/arm64
   registry: ghcr
   cache_from: registry
   cache_to: registry
@@ -26,29 +26,17 @@ images:
     build_args:
       UBUNTU_VERSION: "22.04"
 
-  - name: base-ubuntu-arm64
+  - name: base-openeuler
     layer: 0
-    context: base/ubuntu-arm64
-    dockerfile: base/ubuntu-arm64/Dockerfile
+    context: base/openeuler-amd64
+    dockerfile: base/openeuler-amd64/Dockerfile
     platforms:
-      - linux/arm64
-    version: "22.04"
+      - linux/amd64
+    version: "22.03-lts"
     rebuild_schedule: monthly
     depends_on: []
     build_args:
-      UBUNTU_VERSION: "22.04"
-
-  - name: base-kylin
-    layer: 0
-    context: base/kylin-arm64
-    dockerfile: base/kylin-arm64/Dockerfile
-    platforms:
-      - linux/arm64
-    version: "v10"
-    rebuild_schedule: monthly
-    depends_on: []
-    build_args:
-      KYLIN_VERSION: "v10"
+      OPENEULER_VERSION: "22.03-lts"
 
   # L1: 语言与工具链层
   - name: toolchain-cpp
@@ -57,7 +45,6 @@ images:
     dockerfile: toolchain/cpp/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "14.0"
     rebuild_schedule: on_version
     depends_on:
@@ -74,7 +61,6 @@ images:
     dockerfile: toolchain/gbench/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "1.8.3"
     rebuild_schedule: on_version
     depends_on:
@@ -88,7 +74,6 @@ images:
     dockerfile: toolchain/python/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "3.12"
     rebuild_schedule: on_version
     depends_on:
@@ -103,7 +88,6 @@ images:
     dockerfile: toolchain/common/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "2.0"
     rebuild_schedule: monthly
     depends_on:
@@ -117,7 +101,6 @@ images:
     dockerfile: services/docker/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "25.0"
     rebuild_schedule: on_version
     depends_on:
@@ -132,7 +115,6 @@ images:
     dockerfile: services/ansible/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "2.16"
     rebuild_schedule: on_version
     depends_on:
@@ -147,7 +129,6 @@ images:
     dockerfile: compose/dev-full/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "1.0"
     rebuild_schedule: on_demand
     depends_on:
@@ -164,7 +145,6 @@ images:
     dockerfile: compose/dev-cpp/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "1.0"
     rebuild_schedule: on_demand
     depends_on:
@@ -178,7 +158,6 @@ images:
     dockerfile: compose/dev-python/Dockerfile
     platforms:
       - linux/amd64
-      - linux/arm64
     version: "1.0"
     rebuild_schedule: on_demand
     depends_on:

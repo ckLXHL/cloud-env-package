@@ -1,15 +1,6 @@
 name: Sync to 华为云OBS
 
 on:
-  workflow_run:
-    workflows: ["Push to Registries"]
-    types:
-      - completed
-    branches:
-      - main
-  release:
-    types:
-      - published
   workflow_dispatch:
     inputs:
       version:
@@ -38,10 +29,6 @@ jobs:
     permissions:
       contents: read
       packages: read
-    if: |
-      github.event.workflow_run.conclusion == 'success' ||
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'release'
     steps:
       - uses: actions/checkout@v4
 
@@ -78,7 +65,7 @@ jobs:
         if: ${{ github.event.inputs.arch != 'arm64' }}
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
-          VERSION: ${{ github.event.inputs.version || (github.event_name == 'release' && github.event.release.tag_name) || 'latest' }}
+          VERSION: ${{ github.event.inputs.version || 'latest' }}
           ARCH: amd64
           HUAWEI_OBS_BUCKET: ${{ secrets.HUAWEI_OBS_BUCKET }}
           HUAWEI_OBS_ENDPOINT: ${{ secrets.HUAWEI_OBS_ENDPOINT }}
@@ -93,7 +80,7 @@ jobs:
         if: ${{ github.event.inputs.arch == 'arm64' || github.event.inputs.arch == 'both' }}
         env:
           REGISTRY: ghcr.io/${{ github.repository_owner }}
-          VERSION: ${{ github.event.inputs.version || (github.event_name == 'release' && github.event.release.tag_name) || 'latest' }}
+          VERSION: ${{ github.event.inputs.version || 'latest' }}
           ARCH: arm64
           HUAWEI_OBS_BUCKET: ${{ secrets.HUAWEI_OBS_BUCKET }}
           HUAWEI_OBS_ENDPOINT: ${{ secrets.HUAWEI_OBS_ENDPOINT }}

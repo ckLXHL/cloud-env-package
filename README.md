@@ -2,16 +2,18 @@
 
 > 面向国内封锁网络环境的一体化开发环境管理方案
 
+**当前阶段**：仅支持 `linux/amd64`（x86_64）。arm64 为可选未来计划，待 amd64 验证稳定后手动扩展。
+
 ## 总体架构
 
 ```
 GitHub (源码 / Actions / Copilot / Packages)
          ↓
-   分层镜像构建体系 (BuildKit + QEMU 多架构)
+   分层镜像构建体系（BuildKit，手动触发）
          ↓
     GHCR → 阿里云OSS / 华为OBS（对象存储分发）
          ↓
-目标环境（Ubuntu x86_64 / 麒麟 ARM64）
+目标环境（Ubuntu x86_64 / openEuler x86_64）
          ↓
    本地 Docker / Podman / containerd 运行时
 ```
@@ -22,17 +24,16 @@ GitHub (源码 / Actions / Copilot / Packages)
 cloud-env-package/
 ├── .github/
 │   ├── workflows/
-│   │   ├── build-matrix.yml       # 全量/分层构建
-│   │   ├── push-registry.yml      # 推送镜像仓库
-│   │   ├── sync-oss.yml           # 同步到阿里云OSS
-│   │   ├── sync-obs.yml           # 同步到华为OBS
-│   │   └── auto-update.yml        # 定时自动维护
+│   │   ├── build-matrix.yml       # 手动触发分层构建
+│   │   ├── push-registry.yml      # 手动触发推送镜像仓库
+│   │   ├── sync-oss.yml           # 手动触发同步到阿里云OSS
+│   │   ├── sync-obs.yml           # 手动触发同步到华为OBS
+│   │   └── auto-update.yml        # 手动触发全量重建
 │   └── copilot-instructions.md    # Copilot 上下文定制
 │
 ├── base/                          # L0：基础系统层
-│   ├── ubuntu-amd64/
-│   ├── ubuntu-arm64/
-│   └── kylin-arm64/
+│   ├── ubuntu-amd64/              # Ubuntu 22.04 amd64
+│   └── openeuler-amd64/           # openEuler 22.03 amd64（无授权问题）
 │
 ├── toolchain/                     # L1：语言与工具链层
 │   ├── cpp/                       # GCC/Clang/CMake/Ninja
@@ -81,20 +82,26 @@ cloud-env-package/
 
 | 层级 | 镜像名 | 核心内容 | 架构 | 重建频率 |
 |------|--------|----------|------|----------|
-| L0 | `base-ubuntu` / `base-kylin` | 最小系统 + 国内源 + 证书 | amd64 + arm64 | 月度 |
-| L1-a | `toolchain-cpp` | GCC/Clang/CMake/Ninja | amd64 + arm64 | 按版本 |
-| L1-b | `toolchain-gbench` | Google Benchmark + perf | amd64 + arm64 | 按版本 |
-| L1-c | `toolchain-python` | Python + uv/pip + 常用包 | amd64 + arm64 | 按版本 |
-| L1-d | `toolchain-common` | Git/zsh/tmux/SSH/vim | amd64 + arm64 | 月度 |
-| L2-a | `services-docker` | Docker CE / Podman | amd64 + arm64 | 按版本 |
-| L2-b | `services-ansible` | Ansible + Collection | amd64 + arm64 | 按版本 |
-| L3 | `compose-full/cpp/python` | 面向场景组合 | amd64 + arm64 | 按需 |
+| L0 | `base-ubuntu` | Ubuntu 22.04 最小系统 + 国内源 + 证书 | amd64 | 月度 |
+| L0 | `base-openeuler` | openEuler 22.03 LTS（替代麒麟，无授权问题）| amd64 | 月度 |
+| L1-a | `toolchain-cpp` | GCC/Clang/CMake/Ninja | amd64 | 按版本 |
+| L1-b | `toolchain-gbench` | Google Benchmark + perf | amd64 | 按版本 |
+| L1-c | `toolchain-python` | Python + uv/pip + 常用包 | amd64 | 按版本 |
+| L1-d | `toolchain-common` | Git/zsh/tmux/SSH/vim | amd64 | 月度 |
+| L2-a | `services-docker` | Docker CE / Podman | amd64 | 按版本 |
+| L2-b | `services-ansible` | Ansible + Collection | amd64 | 按版本 |
+| L3 | `compose-full/cpp/python` | 面向场景组合 | amd64 | 按需 |
+
+> **arm64 计划**：待 amd64 验证稳定后，可手动为每个镜像增加 arm64 构建。
 
 ## 快速开始
 
-### 构建镜像（在 GitHub Actions 中自动触发）
+### 手动触发构建（GitHub Actions）
+
+所有 Workflow 均为手动触发（`workflow_dispatch`），在 GitHub Actions 页面选择工作流并点击 **Run workflow**。
 
 ```bash
+# 等效的 Makefile 命令（需要本地配置 Docker Buildx）
 # 全量构建
 make build-all
 
@@ -104,7 +111,6 @@ make build LAYER=toolchain
 
 # 单镜像构建
 make build IMAGE=cpp
-make build IMAGE=gbench ARCH=arm64
 
 # 预览模式
 make build-dry IMAGE=cpp

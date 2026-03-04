@@ -1,16 +1,6 @@
 name: Build Matrix
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'base/**'
-      - 'toolchain/**'
-      - 'services/**'
-      - 'compose/**'
-      - 'config/matrix.yaml'
-      - '.github/workflows/build-matrix.yml'
   workflow_dispatch:
     inputs:
       layer:
@@ -28,14 +18,6 @@ on:
         description: '指定镜像名称（留空则按层构建）'
         required: false
         type: string
-      arch:
-        description: '目标架构 (amd64/arm64，留空则双架构)'
-        required: false
-        type: choice
-        options:
-          - ''
-          - amd64
-          - arm64
       push:
         description: '是否推送到镜像仓库'
         required: false
@@ -47,68 +29,13 @@ env:
   DOCKER_BUILDKIT: 1
 
 jobs:
-  # 检测变更，确定需要重建的镜像
-  detect-changes:
-    name: Detect Changes
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      rebuild_base: ${{ steps.changes.outputs.base }}
-      rebuild_toolchain: ${{ steps.changes.outputs.toolchain }}
-      rebuild_services: ${{ steps.changes.outputs.services }}
-      rebuild_compose: ${{ steps.changes.outputs.compose }}
-      layer: ${{ steps.params.outputs.layer }}
-      image: ${{ steps.params.outputs.image }}
-      arch: ${{ steps.params.outputs.arch }}
-      should_push: ${{ steps.params.outputs.push }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: 检测文件变更
-        id: changes
-        run: |
-          if git diff --name-only HEAD~1 HEAD | grep -q "^base/"; then
-            echo "base=true" >> $GITHUB_OUTPUT
-          else
-            echo "base=false" >> $GITHUB_OUTPUT
-          fi
-          if git diff --name-only HEAD~1 HEAD | grep -q "^toolchain/"; then
-            echo "toolchain=true" >> $GITHUB_OUTPUT
-          else
-            echo "toolchain=false" >> $GITHUB_OUTPUT
-          fi
-          if git diff --name-only HEAD~1 HEAD | grep -q "^services/"; then
-            echo "services=true" >> $GITHUB_OUTPUT
-          else
-            echo "services=false" >> $GITHUB_OUTPUT
-          fi
-          if git diff --name-only HEAD~1 HEAD | grep -q "^compose/"; then
-            echo "compose=true" >> $GITHUB_OUTPUT
-          else
-            echo "compose=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 确定构建参数
-        id: params
-        run: |
-          echo "layer=${{ github.event.inputs.layer || 'all' }}" >> $GITHUB_OUTPUT
-          echo "image=${{ github.event.inputs.image || '' }}" >> $GITHUB_OUTPUT
-          echo "arch=${{ github.event.inputs.arch || '' }}" >> $GITHUB_OUTPUT
-          echo "push=${{ github.event.inputs.push || 'true' }}" >> $GITHUB_OUTPUT
-
   # L0: 构建基础镜像
   build-base:
     name: Build Base Images
     runs-on: ubuntu-latest
-    needs: detect-changes
     if: |
-      needs.detect-changes.outputs.rebuild_base == 'true' ||
-      needs.detect-changes.outputs.layer == 'base' ||
-      needs.detect-changes.outputs.layer == 'all' ||
-      github.event_name == 'workflow_dispatch'
+      github.event.inputs.layer == 'base' ||
+      github.event.inputs.layer == 'all'
     permissions:
       contents: read
       packages: write
@@ -117,18 +44,12 @@ jobs:
         include:
           - name: base-ubuntu
             context: base/ubuntu-amd64
-            platform: linux/amd64
-          - name: base-ubuntu
-            context: base/ubuntu-arm64
-            platform: linux/arm64
-          - name: base-kylin
-            context: base/kylin-arm64
-            platform: linux/arm64
+            version: "22.04"
+          - name: base-openeuler
+            context: base/openeuler-amd64
+            version: "22.03-lts"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU（多架构支持）
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -142,30 +63,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 获取版本信息
-        id: version
-        run: |
-          VERSION=$(python3 -c "
-          import yaml
-          with open('config/matrix.yaml') as f:
-              cfg = yaml.safe_load(f)
-          for img in cfg['images']:
-              if img['name'] == '${{ matrix.name }}':
-                  print(img['version'])
-                  break
-          else:
-              print('latest')
-          ")
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
-          platforms: ${{ matrix.platform }}
-          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          platforms: linux/amd64
+          push: ${{ github.event.inputs.push == 'true' }}
           tags: |
-            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ matrix.version }}
             ${{ env.REGISTRY }}/${{ matrix.name }}:latest
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ matrix.name }}:cache,mode=max
@@ -177,17 +82,11 @@ jobs:
   build-toolchain:
     name: Build Toolchain Images
     runs-on: ubuntu-latest
-    needs:
-      - detect-changes
-      - build-base
+    needs: build-base
     if: |
       always() &&
       (needs.build-base.result == 'success' || needs.build-base.result == 'skipped') &&
-      (needs.detect-changes.outputs.rebuild_toolchain == 'true' ||
-       needs.detect-changes.outputs.rebuild_base == 'true' ||
-       needs.detect-changes.outputs.layer == 'toolchain' ||
-       needs.detect-changes.outputs.layer == 'all' ||
-       github.event_name == 'workflow_dispatch')
+      (github.event.inputs.layer == 'toolchain' || github.event.inputs.layer == 'all')
     permissions:
       contents: read
       packages: write
@@ -196,15 +95,15 @@ jobs:
         include:
           - name: toolchain-cpp
             context: toolchain/cpp
+            version: "14.0"
           - name: toolchain-python
             context: toolchain/python
+            version: "3.12"
           - name: toolchain-common
             context: toolchain/common
+            version: "2.0"
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -216,30 +115,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 获取版本信息
-        id: version
-        run: |
-          VERSION=$(python3 -c "
-          import yaml
-          with open('config/matrix.yaml') as f:
-              cfg = yaml.safe_load(f)
-          for img in cfg['images']:
-              if img['name'] == '${{ matrix.name }}':
-                  print(img['version'])
-                  break
-          else:
-              print('latest')
-          ")
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
-          platforms: linux/amd64,linux/arm64
-          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          platforms: linux/amd64
+          push: ${{ github.event.inputs.push == 'true' }}
           tags: |
-            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ matrix.version }}
             ${{ env.REGISTRY }}/${{ matrix.name }}:latest
           build-args: |
             REGISTRY=${{ env.REGISTRY }}
@@ -253,24 +136,16 @@ jobs:
   build-gbench:
     name: Build Google Benchmark
     runs-on: ubuntu-latest
-    needs:
-      - detect-changes
-      - build-toolchain
+    needs: build-toolchain
     if: |
       always() &&
       needs.build-toolchain.result == 'success' &&
-      (needs.detect-changes.outputs.rebuild_toolchain == 'true' ||
-       needs.detect-changes.outputs.layer == 'toolchain' ||
-       needs.detect-changes.outputs.layer == 'all' ||
-       github.event_name == 'workflow_dispatch')
+      (github.event.inputs.layer == 'toolchain' || github.event.inputs.layer == 'all')
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -286,8 +161,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: toolchain/gbench
-          platforms: linux/amd64,linux/arm64
-          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          platforms: linux/amd64
+          push: ${{ github.event.inputs.push == 'true' }}
           tags: |
             ${{ env.REGISTRY }}/toolchain-gbench:1.8.3
             ${{ env.REGISTRY }}/toolchain-gbench:latest
@@ -300,17 +175,11 @@ jobs:
   build-services:
     name: Build Service Images
     runs-on: ubuntu-latest
-    needs:
-      - detect-changes
-      - build-toolchain
+    needs: build-toolchain
     if: |
       always() &&
       (needs.build-toolchain.result == 'success' || needs.build-toolchain.result == 'skipped') &&
-      (needs.detect-changes.outputs.rebuild_services == 'true' ||
-       needs.detect-changes.outputs.rebuild_toolchain == 'true' ||
-       needs.detect-changes.outputs.layer == 'services' ||
-       needs.detect-changes.outputs.layer == 'all' ||
-       github.event_name == 'workflow_dispatch')
+      (github.event.inputs.layer == 'services' || github.event.inputs.layer == 'all')
     permissions:
       contents: read
       packages: write
@@ -323,9 +192,6 @@ jobs:
             context: services/ansible
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -341,8 +207,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
-          platforms: linux/amd64,linux/arm64
-          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          platforms: linux/amd64
+          push: ${{ github.event.inputs.push == 'true' }}
           tags: |
             ${{ env.REGISTRY }}/${{ matrix.name }}:latest
           build-args: |
@@ -355,17 +221,13 @@ jobs:
     name: Build Compose Images
     runs-on: ubuntu-latest
     needs:
-      - detect-changes
       - build-services
       - build-gbench
     if: |
       always() &&
       (needs.build-services.result == 'success' || needs.build-services.result == 'skipped') &&
       (needs.build-gbench.result == 'success' || needs.build-gbench.result == 'skipped') &&
-      (needs.detect-changes.outputs.rebuild_compose == 'true' ||
-       needs.detect-changes.outputs.layer == 'compose' ||
-       needs.detect-changes.outputs.layer == 'all' ||
-       github.event_name == 'workflow_dispatch')
+      (github.event.inputs.layer == 'compose' || github.event.inputs.layer == 'all')
     permissions:
       contents: read
       packages: write
@@ -381,9 +243,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -398,8 +257,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
-          platforms: linux/amd64,linux/arm64
-          push: ${{ needs.detect-changes.outputs.should_push == 'true' }}
+          platforms: linux/amd64
+          push: ${{ github.event.inputs.push == 'true' }}
           tags: |
             ${{ env.REGISTRY }}/${{ matrix.name }}:latest
           build-args: |
