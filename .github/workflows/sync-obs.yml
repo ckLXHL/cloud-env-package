@@ -2,11 +2,6 @@ name: Sync to 华为云OBS
 
 on:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
     inputs:
       version:
         description: '版本号（留空则使用 latest）'
@@ -26,6 +21,10 @@ concurrency:
         description: '指定镜像（空格分隔，留空则同步所有）'
         required: false
         type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   sync-to-obs:
