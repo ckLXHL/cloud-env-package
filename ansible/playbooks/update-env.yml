@@ -1,0 +1,99 @@
+---
+# Update Environment Playbook: 更新维护开发环境
+# 功能：检查 OSS/OBS 最新版本，按需拉取更新
+# 用法: ansible-playbook playbooks/update-env.yml -i inventory/hosts.ini
+- name: Update development environment
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    devenv_install_dir: "/opt/devenv"
+    registry_source: "{{ lookup('env', 'REGISTRY_SOURCE') | default('oss', true) }}"
+    oss_bucket: "{{ lookup('env', 'OSS_BUCKET') }}"
+    oss_endpoint: "{{ lookup('env', 'OSS_ENDPOINT') }}"
+    oss_access_key: "{{ lookup('env', 'OSS_ACCESS_KEY') }}"
+    oss_secret_key: "{{ lookup('env', 'OSS_SECRET_KEY') }}"
+
+  tasks:
+    - name: 检查 manifest.json（OSS）
+      shell: |
+        ossutil cp \
+          oss://{{ oss_bucket }}/devenv/latest/manifest.json \
+          /tmp/devenv-manifest-remote.json \
+          --config-file ~/.ossutilconfig --force
+        cat /tmp/devenv-manifest-remote.json
+      when: registry_source == "oss"
+      register: remote_manifest_oss
+      changed_when: false
+      failed_when: false
+
+    - name: 检查 manifest.json（OBS）
+      shell: |
+        obsutil cp \
+          obs://{{ lookup('env', 'OBS_BUCKET') }}/devenv/latest/manifest.json \
+          /tmp/devenv-manifest-remote.json -f
+        cat /tmp/devenv-manifest-remote.json
+      when: registry_source == "obs"
+      register: remote_manifest_obs
+      changed_when: false
+      failed_when: false
+
+    - name: 读取远程 manifest
+      set_fact:
+        remote_manifest: >-
+          {{
+            (remote_manifest_oss.stdout | default('{}'))
+            if registry_source == 'oss'
+            else (remote_manifest_obs.stdout | default('{}'))
+          }}
+
+    - name: 检查本地已安装版本
+      slurp:
+        src: "{{ devenv_install_dir }}/manifest.json"
+      register: local_manifest_raw
+      failed_when: false
+
+    - name: 读取本地 manifest
+      set_fact:
+        local_manifest: "{{ (local_manifest_raw.content | default('e30=') | b64decode | from_json) }}"
+
+    - name: 比较版本
+      debug:
+        msg: >
+          本地版本: {{ local_manifest.version | default('未安装') }},
+          远程版本: {{ (remote_manifest | from_json).version | default('未知') }}
+
+    - name: 检查是否需要更新
+      set_fact:
+        needs_update: >-
+          {{
+            local_manifest.version | default('') !=
+            (remote_manifest | from_json).version | default('')
+          }}
+
+    - name: 执行更新（如有新版本）
+      shell: |
+        ansible-playbook \
+          -i {{ ansible_inventory_sources | first }} \
+          {{ playbook_dir }}/deploy-env.yml \
+          -e "devenv_version={{ (remote_manifest | from_json).version }}" \
+          -e "devenv_scene={{ devenv_scene | default('full') }}" \
+          -e "registry_source={{ registry_source }}" \
+          --limit {{ inventory_hostname }}
+      when: needs_update | bool
+      delegate_to: localhost
+      run_once: true
+      changed_when: true
+
+    - name: 保存 manifest 到本地
+      copy:
+        content: "{{ remote_manifest }}"
+        dest: "{{ devenv_install_dir }}/manifest.json"
+        mode: "0644"
+      when: needs_update | bool
+
+    - name: 无需更新
+      debug:
+        msg: "已是最新版本，无需更新"
+      when: not (needs_update | bool)

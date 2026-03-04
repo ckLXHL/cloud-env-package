@@ -1,0 +1,56 @@
+# 镜像仓库配置
+# 定义所有目标镜像仓库
+
+version: "1.0"
+
+default_registry: ghcr
+
+registries:
+  - name: ghcr
+    url: ghcr.io/ckLXHL
+    description: "GitHub Container Registry（主仓库，GitHub原生）"
+    auth:
+      username_env: GITHUB_ACTOR
+      password_env: GITHUB_TOKEN
+
+  - name: aliyun-acr
+    url: registry.cn-hangzhou.aliyuncs.com/ckLXHL
+    description: "阿里云容器镜像服务（国内备用）"
+    auth:
+      username_env: ALIYUN_ACR_USERNAME
+      password_env: ALIYUN_ACR_PASSWORD
+
+  - name: huawei-swr
+    url: swr.cn-north-4.myhuaweicloud.com/ckLXHL
+    description: "华为云容器镜像服务（国内备用）"
+    auth:
+      username_env: HUAWEI_SWR_USERNAME
+      password_env: HUAWEI_SWR_PASSWORD
+
+# 对象存储配置
+object_storage:
+  - name: aliyun-oss
+    type: oss
+    bucket_env: ALIYUN_OSS_BUCKET
+    endpoint_env: ALIYUN_OSS_ENDPOINT
+    access_key_env: ALIYUN_OSS_ACCESS_KEY
+    secret_key_env: ALIYUN_OSS_SECRET_KEY
+    prefix: "devenv"
+    description: "阿里云对象存储（国内分发）"
+
+  - name: huawei-obs
+    type: obs
+    bucket_env: HUAWEI_OBS_BUCKET
+    endpoint_env: HUAWEI_OBS_ENDPOINT
+    access_key_env: HUAWEI_OBS_ACCESS_KEY
+    secret_key_env: HUAWEI_OBS_SECRET_KEY
+    prefix: "devenv"
+    description: "华为云对象存储（国内分发）"
+
+# 镜像名称映射（image name → 所有仓库 tag）
+tag_policy:
+  latest_branch: main
+  version_pattern: "v{major}.{minor}.{patch}"
+  additional_tags:
+    - "{branch}"
+    - "{short_sha}"

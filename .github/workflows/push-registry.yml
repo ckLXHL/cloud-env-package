@@ -1,0 +1,133 @@
+name: Push to Registries
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+    inputs:
+      image:
+        description: '指定镜像（留空则推送所有）'
+        required: false
+        type: string
+      registry:
+        description: '目标仓库 (ghcr/aliyun-acr/huawei-swr/all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - ghcr
+          - aliyun-acr
+          - huawei-swr
+      version:
+        description: '版本标签'
+        required: false
+        default: 'latest'
+        type: string
+
+env:
+  GHCR_REGISTRY: ghcr.io/${{ github.repository_owner }}
+  ALIYUN_REGISTRY: registry.cn-hangzhou.aliyuncs.com/${{ github.repository_owner }}
+  HUAWEI_REGISTRY: swr.cn-north-4.myhuaweicloud.com/${{ github.repository_owner }}
+
+jobs:
+  push-to-aliyun:
+    name: Push to 阿里云ACR
+    runs-on: ubuntu-latest
+    if: |
+      github.event.inputs.registry == 'all' ||
+      github.event.inputs.registry == 'aliyun-acr'
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y skopeo
+
+      - name: 登录 GHCR（源仓库）
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            skopeo login ghcr.io \
+              -u "${{ github.actor }}" \
+              --password-stdin
+
+      - name: 登录阿里云ACR（目标仓库）
+        if: ${{ secrets.ALIYUN_ACR_USERNAME != '' }}
+        run: |
+          echo "${{ secrets.ALIYUN_ACR_PASSWORD }}" | \
+            skopeo login registry.cn-hangzhou.aliyuncs.com \
+              -u "${{ secrets.ALIYUN_ACR_USERNAME }}" \
+              --password-stdin
+
+      - name: 推送镜像到阿里云ACR
+        if: ${{ secrets.ALIYUN_ACR_USERNAME != '' }}
+        run: |
+          python3 -c "
+          import yaml
+          with open('config/matrix.yaml') as f:
+              cfg = yaml.safe_load(f)
+          images = [img['name'] for img in cfg['images']]
+          print('\n'.join(images))
+          " | while read IMAGE; do
+            echo "推送: ${IMAGE}"
+            skopeo copy --all \
+              "docker://${{ env.GHCR_REGISTRY }}/${IMAGE}:${{ github.event.inputs.version || 'latest' }}" \
+              "docker://${{ env.ALIYUN_REGISTRY }}/${IMAGE}:${{ github.event.inputs.version || 'latest' }}" \
+              || echo "警告: 推送 ${IMAGE} 失败，继续..."
+          done
+
+  push-to-huawei:
+    name: Push to 华为云SWR
+    runs-on: ubuntu-latest
+    if: |
+      github.event.inputs.registry == 'all' ||
+      github.event.inputs.registry == 'huawei-swr'
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y skopeo
+
+      - name: 登录 GHCR（源仓库）
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            skopeo login ghcr.io \
+              -u "${{ github.actor }}" \
+              --password-stdin
+
+      - name: 登录华为云SWR
+        if: ${{ secrets.HUAWEI_SWR_USERNAME != '' }}
+        run: |
+          echo "${{ secrets.HUAWEI_SWR_PASSWORD }}" | \
+            skopeo login swr.cn-north-4.myhuaweicloud.com \
+              -u "${{ secrets.HUAWEI_SWR_USERNAME }}" \
+              --password-stdin
+
+      - name: 推送镜像到华为云SWR
+        if: ${{ secrets.HUAWEI_SWR_USERNAME != '' }}
+        run: |
+          python3 -c "
+          import yaml
+          with open('config/matrix.yaml') as f:
+              cfg = yaml.safe_load(f)
+          images = [img['name'] for img in cfg['images']]
+          print('\n'.join(images))
+          " | while read IMAGE; do
+            echo "推送: ${IMAGE}"
+            skopeo copy --all \
+              "docker://${{ env.GHCR_REGISTRY }}/${IMAGE}:${{ github.event.inputs.version || 'latest' }}" \
+              "docker://${{ env.HUAWEI_REGISTRY }}/${IMAGE}:${{ github.event.inputs.version || 'latest' }}" \
+              || echo "警告: 推送 ${IMAGE} 失败，继续..."
+          done
